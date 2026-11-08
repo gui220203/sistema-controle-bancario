@@ -561,37 +561,535 @@ const char *msgMov(int cod){
     }
     return "Operacao realizada..";
 }
+//---------------------- Funcoes do arquivo ----------------------
 
+//Abre o arquivo e confere o tamanho. Retorna 1=ok (arq pode ser NULL se nao existe)
+//0=erro (arquivo corrompido ou nao abre)
+int abreLeitura(const char *nome, long tamReg, FILE **arq){
+    long tam;
 
-int main(){
+    *arq = fopen(nome, "rb");
+    if (*arq == NULL){
+        return (errno == ENOENT);   //arquivo ainda nao existe: lista comeca vazia
+    }
+
+    fseek(*arq, 0, SEEK_END);
+    tam = ftell(*arq);
+    rewind(*arq);
+
+    //o tamanho precisa ser multiplo do registro, senao o arquivo esta corrompido
+    if (tam < 0 || tam % tamReg != 0){
+        fclose(*arq);
+        *arq = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+//Le o arquivo de contas e monta a lista. Retorna 1=ok 0=erro
+int carregaContas(ListaContas *L, const char *nome){
+    reg_conta c;
+    FILE *arq;
+
+    if (!abreLeitura(nome, sizeof(reg_conta), &arq)) return 0;
+    if (arq == NULL) return 1;
+
+    while (fread(&c, sizeof(reg_conta), 1, arq) == 1){
+        //so o conteudo vem do arquivo; os ponteiros sao refeitos na insercao
+        if (incluiConta(L, c, 3, 0) != 0){
+            fclose(arq);
+            liberaContas(L);
+            return 0;
+        }
+    }
+    fclose(arq);
+    return 1;
+}
+
+//Le o arquivo de movimentacoes. Retorna 1=ok 0=erro
+int carregaMov(ListaMov *M, ListaContas *L, const char *nome){
+    reg_mov m;
+    FILE *arq;
+
+    if (!abreLeitura(nome, sizeof(reg_mov), &arq)) return 0;
+    if (arq == NULL) return 1;
+
+    while (fread(&m, sizeof(reg_mov), 1, arq) == 1){
+        //a movimentacao precisa pertencer a uma conta que existe
+        if (pesquisaConta(L, m.codigo_conta) == NULL || !insereMovFinal(M, m)){
+            fclose(arq);
+            liberaMov(M);
+            return 0;
+        }
+    }
+    fclose(arq);
+    return 1;
+}
+
+//Troca o arquivo temporario pelo definitivo (assim, se der erro no meio da
+//gravacao, o arquivo antigo continua intacto)
+int fechaGravacao(FILE *arq, int falhou, const char *tmp, const char *nome){
+    if (fclose(arq) != 0) falhou = 1;
+
+    if (falhou){
+        remove(tmp);
+        return 0;
+    }
+    remove(nome);
+    return (rename(tmp, nome) == 0);
+}
+
+//Grava a lista de contas no arquivo. Retorna 1=ok 0=erro
+int salvaContas(ListaContas *L, const char *nome){
+    char tmp[300];
+    FILE *arq;
+    ContaApontador p;
+    int falhou = 0;
+
+    sprintf(tmp, "%s.tmp", nome);
+    arq = fopen(tmp, "wb");
+    if (arq == NULL) return 0;
+
+    //Grava so o conteudo, o ponteiro nao vai para o arquivo
+    p = L->Primeiro;
+    while (p != NULL && !falhou){
+        if (fwrite(&p->conteudo, sizeof(reg_conta), 1, arq) != 1) falhou = 1;
+        p = p->proximo;
+    }
+    return fechaGravacao(arq, falhou, tmp, nome);
+}
+
+//Grava a lista de movimentacoes no arquivo. Retorna 1=ok 0=erro
+int salvaMov(ListaMov *M, const char *nome){
+    char tmp[300];
+    FILE *arq;
+    MovApontador p;
+    int falhou = 0;
+
+    sprintf(tmp, "%s.tmp", nome);
+    arq = fopen(tmp, "wb");
+    if (arq == NULL) return 0;
+
+    p = M->Primeiro;
+    while (p != NULL && !falhou){
+        if (fwrite(&p->conteudo, sizeof(reg_mov), 1, arq) != 1) falhou = 1;
+        p = p->proximo;
+    }
+    return fechaGravacao(arq, falhou, tmp, nome);
+}
+//---------------------- Leitura de campos na tela ----------------------
+
+//Le um texto obrigatorio (nao aceita vazio)
+void lerTexto(int y, char *dest, int tam){
+    do{
+        limpaCampo(y);
+        if (fgets(dest, tam, stdin) == NULL){
+            strcpy(dest, "-");          //fim da entrada
+            return;
+        }
+        ajusta_string(dest);
+
+        if (dest[0] == '\0'){
+            mensagem("Campo obrigatorio..");
+        }
+    }while (dest[0] == '\0');
+}
+
+//Le um texto opcional (se ficar vazio vira "Nao informado")
+void lerTextoOpcional(int y, char *dest, int tam){
+    limpaCampo(y);
+    if (fgets(dest, tam, stdin) == NULL) dest[0] = '\0';
+    else ajusta_string(dest);
+
+    if (dest[0] == '\0'){
+        strcpy(dest, "Nao informado");
+        gotoxy(COL,y);
+        printf("%s", dest);
+    }
+}
+
+//Le um numero real (aceita virgula). Pergunta de novo se for invalido
+double lerDouble(int y){
+    char buf[40];
+    char *fim;
+    char *p;
+    double v;
+
+    while (1){
+        limpaCampo(y);
+        if (fgets(buf, 40, stdin) == NULL) return 0;
+        ajusta_string(buf);
+
+        for (p = buf; *p; p++){
+            if (*p == ',') *p = '.';
+        }
+
+        v = strtod(buf, &fim);
+
+        if (buf[0] == '\0' || *fim != '\0' || !(v > -1e12 && v < 1e12)){
+            mensagem("Valor invalido. Exemplo: 1500.50");
+        }else{
+            return v;
+        }
+    }
+}
+
+//Le um numero inteiro (0 se for invalido)
+int lerInteiro(int y){
+    int n = 0;
+
+    limpaCampo(y);
+    scanf("%d", &n);
+    limparBuffer();
+    return n;
+}
+
+//Le uma data valida (dd/mm/aaaa)
+void lerData(int y, char *dest){
+    char buf[40];
+
+    while (1){
+        limpaCampo(y);
+        if (fgets(buf, 40, stdin) == NULL){
+            strcpy(dest, "01/01/1900");
+            return;
+        }
+        ajusta_string(buf);
+
+        if (dataChave(buf) < 0){
+            mensagem("Data invalida. Use dd/mm/aaaa (ex.: 15/10/2024)..");
+        }else{
+            strcpy(dest, buf);
+            return;
+        }
+    }
+}
+
+//Le um campo da conta (campo de 1 a 7)
+void lerCampoConta(reg_conta *c, int campo){
+    int y = 5 + campo * 2;
+    int v;
+    double x;
+
+    switch (campo)
+    {
+        case 1 :
+            lerTexto(y, c->banco, 50);
+            break;
+
+        case 2 :
+            lerTexto(y, c->agencia, 10);
+            break;
+
+        case 3 :
+            lerTexto(y, c->numero_conta, 20);
+            break;
+
+        case 4 :
+            do{
+                v = lerInteiro(y);
+                if (v < 1 || v > 3) mensagem("Digite 1, 2 ou 3..");
+            }while (v < 1 || v > 3);
+            strcpy(c->tipo_conta, TIPOS[v-1]);
+            limpaCampo(y);
+            printf("%s", c->tipo_conta);
+            break;
+
+        case 5 :
+            do{
+                x = lerDouble(y);
+                if (x < 0){
+                    mensagem("O limite nao pode ser negativo..");
+                }else if (centavos(c->vl_saldo) + centavos(x) < 0){
+                    mensagem("Esse limite deixa o saldo atual abaixo do permitido..");
+                    x = -1;
+                }
+            }while (x < 0);
+            c->vl_limite = x;
+            break;
+
+        case 6 :
+            do{
+                x = lerDouble(y);
+                if (centavos(x) + centavos(c->vl_limite) < 0){
+                    mensagem("O saldo nao pode ficar abaixo do limite negativo..");
+                }
+            }while (centavos(x) + centavos(c->vl_limite) < 0);
+            c->vl_saldo = x;
+            break;
+
+        case 7 :
+            do{
+                v = lerInteiro(y);
+                if (v < 1 || v > 2) mensagem("Digite 1 ou 2..");
+            }while (v < 1 || v > 2);
+            strcpy(c->status, v == 1 ? "ativo" : "inativo");
+            limpaCampo(y);
+            printf("%s", c->status);
+            break;
+    }
+}
+
+//Mostra os dados da conta na tela
+void mostraConta(reg_conta *c){
+    gotoxy(COL,5);
+    printf("%d", c->codigo_conta);
+    gotoxy(COL,7);
+    printf("%s", c->banco);
+    gotoxy(COL,9);
+    printf("%s", c->agencia);
+    gotoxy(COL,11);
+    printf("%s", c->numero_conta);
+    gotoxy(COL,13);
+    printf("%s", c->tipo_conta);
+    gotoxy(COL,15);
+    printf("%.2f", c->vl_limite);
+    gotoxy(COL,17);
+    printf("%.2f", c->vl_saldo);
+    gotoxy(COL,19);
+    printf("%s", c->status);
+}
+
+//Pede o codigo da conta (0 para sair). Se deveExistir=1 o codigo precisa estar na lista,
+//se deveExistir=0 o codigo nao pode estar na lista
+int pedeCodigoConta(ListaContas *L, int deveExistir){
+    int codigo;
+    int achou;
+    int invalido;
+    int r;
+
+    do{
+        codigo = 0;
+        invalido = 0;
+
+        limpa_mensagem();
+        gotoxy(07,23);
+        printf("Digite 0 para sair..");
+
+        gotoxy(COL,05);
+        printf("          ");
+        gotoxy(COL,05);
+        r = scanf("%d", &codigo);
+        if (r == EOF) return 0;
+        limparBuffer();
+
+        if (r != 1 || codigo < 0){
+            mensagem("Codigo invalido. Digite um numero inteiro..");
+            invalido = 1;
+        }else if (codigo != 0){
+            achou = (pesquisaConta(L, codigo) != NULL);
+
+            if (deveExistir && !achou){
+                mensagem("Conta nao cadastrada..");
+                invalido = 1;
+            }
+            if (!deveExistir && achou){
+                mensagem("Codigo ja cadastrado..");
+                invalido = 1;
+            }
+        }
+    }while (invalido);
+
+    limpa_mensagem();
+    return codigo;
+}
+
+//---------------------- Cadastro de contas ----------------------
+
+//Incluir conta: modo 1=inicio, 2=posicao, 3=final
+void cadastrarConta(ListaContas *L, int modo){
+    reg_conta c;
+    int resp;
+    int pos;
+    int campo;
+    int r;
+
+    do{
+        resp = 2;
+        pos = 1;
+        memset(&c, 0, sizeof(c));
+
+        tela();
+        tela_conta();
+
+        if (modo == 1) titulo("Incluir Conta no Inicio da Lista");
+        if (modo == 2) titulo("Incluir Conta em uma Posicao da Lista");
+        if (modo == 3) titulo("Incluir Conta no Final da Lista");
+
+        c.codigo_conta = pedeCodigoConta(L, 0);
+
+        if (c.codigo_conta != 0){
+
+            //No modo 2 pergunta a posicao
+            if (modo == 2){
+                pos = perguntaPosicao(tamanhoContas(L) + 1);
+            }
+
+            if (pos != 0){
+                for (campo = 1; campo <= 7; campo++){
+                    lerCampoConta(&c, campo);
+                }
+
+                resp = perguntaInt("Deseja gravar os dados (1=Sim; 2=Nao).: ");
+
+                if (resp == 1){
+                    r = incluiConta(L, c, modo, pos);
+
+                    if (r == 0)      mensagem("Conta cadastrada com sucesso..");
+                    else if (r == 3) mensagem("Erro ao alocar memoria..");
+                    else             mensagem("Nao foi possivel incluir: codigo ou posicao invalidos..");
+                }
+
+                resp = perguntaInt("Deseja cadastrar outra? (1=Sim;2=Nao).: ");
+            }
+        }
+    }while (c.codigo_conta != 0 && pos != 0 && resp == 1);
+}
+//Alteracao do cadastro da conta
+void alterarConta(ListaContas *L){
+    ContaApontador p;
+    reg_conta c;
+    int codigo;
+    int campo;
+    int resp;
+
+    do{
+        resp = 2;
+
+        tela();
+        tela_conta();
+        titulo("Alteracao do Cadastro da Conta");
+
+        if (L->Primeiro == NULL){
+            mensagem("Lista vazia, nao ha contas para alterar..");
+            return;
+        }
+
+        codigo = pedeCodigoConta(L, 1);
+
+        if (codigo != 0){
+            p = pesquisaConta(L, codigo);
+
+            //Trabalha em uma copia e so grava se o usuario confirmar
+            c = p->conteudo;
+            mostraConta(&c);
+
+            do{
+                campo = perguntaInt("Digite o numero do campo a alterar (0=Fim).: ");
+
+                if (campo == 6){
+                    mensagem("O saldo so muda por movimentacao financeira..");
+                }else if (campo >= 1 && campo <= 7){
+                    lerCampoConta(&c, campo);
+                }else if (campo != 0){
+                    mensagem("Campo invalido, digite de 1 a 7..");
+                }
+            }while (campo != 0);
+
+            resp = perguntaInt("Deseja gravar as alteracoes (1=Sim; 2=Nao).: ");
+
+            if (resp == 1){
+                p->conteudo = c;
+                mensagem("Conta alterada com sucesso..");
+            }
+
+            resp = perguntaInt("Deseja alterar outra? (1=Sim;2=Nao).: ");
+        }
+    }while (codigo != 0 && resp == 1);
+}
+
+//Consulta uma conta pelo codigo
+void consultarConta(ListaContas *L, ListaMov *M){
+    ContaApontador p;
+    int codigo;
+    int resp;
+
+    do{
+        resp = 2;
+
+        tela();
+        tela_conta();
+        titulo("Consultar Conta");
+
+        if (L->Primeiro == NULL){
+            mensagem("Lista vazia, nao ha contas cadastradas..");
+            return;
+        }
+
+        codigo = pedeCodigoConta(L, 1);
+
+        if (codigo != 0){
+            p = pesquisaConta(L, codigo);
+            mostraConta(&p->conteudo);
+
+            gotoxy(70,7);
+            printf("Movimentacoes....: %d", contaMov(M, codigo));
+            gotoxy(70,9);
+            printf("Disponivel (R$)..: %.2f", p->conteudo.vl_saldo + p->conteudo.vl_limite);
+
+            mensagem("Conta encontrada..");
+
+            resp = perguntaInt("Deseja consultar outra? (1=Sim;2=Nao).: ");
+        }
+    }while (codigo != 0 && resp == 1);
+}
+
+//Remover conta (so se nao tiver movimentacoes)
+void removerConta(ListaContas *L, ListaMov *M){
+    ContaApontador p;
+    int codigo;
+    int resp;
+
+    do{
+        resp = 2;
+
+        tela();
+        tela_conta();
+        titulo("Remover Conta");
+
+        if (L->Primeiro == NULL){
+            mensagem("Lista vazia, nao ha o que remover..");
+            return;
+        }
+
+        codigo = pedeCodigoConta(L, 1);
+
+        if (codigo != 0){
+            p = pesquisaConta(L, codigo);
+            mostraConta(&p->conteudo);
+
+            if (contaMov(M, codigo) > 0){
+                mensagem("Conta possui movimentacoes e nao pode ser removida..");
+            }else{
+                resp = perguntaInt("Confirma a remocao? (1=Sim;2=Nao).: ");
+
+                if (resp == 1){
+                    removeConta(L, p);
+                    mensagem("Conta removida com sucesso..");
+                }
+            }
+
+            resp = perguntaInt("Deseja remover outra? (1=Sim;2=Nao).: ");
+        }
+    }while (codigo != 0 && resp == 1);
+}int main(){
     ListaContas L;
     ListaMov M;
-    reg_conta c;
-    ContaApontador p;
-    int r;
+    int op;
 
     iniciaContas(&L);
     iniciaMov(&M);
-    memset(&c, 0, sizeof(c));
-    c.codigo_conta = 101;
-    strcpy(c.status, "ativo");
-    c.vl_saldo = 500;
-    c.vl_limite = 200;
-    incluiConta(&L, c, 3, 0);
-    p = pesquisaConta(&L, 101);
 
-    r = registraMov(p, &M, 1, "10/10/2024", "Deposito", 200);
-    printf("credito 200   -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
-    r = registraMov(p, &M, 2, "12/10/2024", "Mercado", 100);
-    printf("debito 100    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
-    r = registraMov(p, &M, 2, "15/10/2024", "Posto", 150);
-    printf("debito 150    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
-    r = registraMov(p, &M, 2, "16/10/2024", "X", 650.01);
-    printf("debito 650.01 -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
-    r = registraMov(p, &M, 2, "16/10/2024", "X", 650);
-    printf("debito 650    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
-    r = registraMov(p, &M, 1, "01/01/2024", "X", 10);
-    printf("data antiga   -> codigo %d\n", r);
+    do{
+        system("cls");
+        printf("1-Incluir 2-Alterar 3-Consultar 4-Remover 0-Sair: ");
+        op = lerOpcao();
+
+        if (op == 1) cadastrarConta(&L, 3);
+        if (op == 2) alterarConta(&L);
+        if (op == 3) consultarConta(&L, &M);
+        if (op == 4) removerConta(&L, &M);
+    }while (op != 0 && op != -1);
 
     liberaContas(&L);
     liberaMov(&M);

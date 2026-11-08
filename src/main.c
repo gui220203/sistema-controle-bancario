@@ -2,9 +2,10 @@
 Autor.....: Guilherme Viana da Silva
 Turma.....: 2C ESW
 Data......: 07/11/2026
-Objetivo..: Sistema de controle bancario com lista encadeadas
+Objetivo..: Sistema de Controle Bancario - aplicar listas encadeadas
+            Contas ............: lista DUPLAMENTE encadeada
+            Movimentacoes .....: lista SIMPLESMENTE encadeada
 */
-
 #include <stdio.h>
 #include <conio.h>
 #include <windows.h>
@@ -12,41 +13,39 @@ Objetivo..: Sistema de controle bancario com lista encadeadas
 #include <string.h>
 #include <errno.h>
 
-//nome dos arquivos onde as listas vão ser gravadas
+//Nomes dos arquivos onde as listas sao gravadas
 #define ARQ_CONTAS "contas.dat"
-#define ARQ_MOV "movimentacoes.dat"
+#define ARQ_MOV    "movimentacoes.dat"
 
-#define COL        33 //coluna onde o usuario vai digitar os campos
-#define LINHA_INI  7  // Primeira linha dos relatorio
-#define LINHA_FIM 20 //Ultima linha dos relatioris
+#define COL        33    //coluna onde o usuario digita os campos
+#define LINHA_INI  7     //primeira linha dos relatorios
+#define LINHA_FIM  20    //ultima linha dos relatorios
 
 const char *TIPOS[3] = {"corrente", "poupanca", "cartao credito"};
 
-//---------------------------Estrutura de Dados-------------------
+//---------------------- Estruturas de dados ----------------------
 
-//dados das contas bancarias
+//Dados da conta bancaria
 typedef struct
 {
-    int codigo_conta;
-    char banco[50];
-    char agencia[10];
-    char numero_conta[20];
-    char tipo_conta[20];
-    double vl_saldo;
-    double vl_limite;
-    char status[10];
-
+    int     codigo_conta;
+    char    banco[50];
+    char    agencia[10];
+    char    numero_conta[20];
+    char    tipo_conta[20];
+    double  vl_saldo;
+    double  vl_limite;      //limite negativo permitido (cheque especial)
+    char    status[10];     //"ativo" ou "inativo"
 } reg_conta;
 
-//no da lista de contas Duplamente encadeata
-
+//No da lista de contas: DUPLAMENTE encadeada (tem anterior e proximo)
 typedef struct ContaItem *ContaApontador;
 
 typedef struct ContaItem
 {
     reg_conta conteudo;
     ContaApontador anterior;
-    ContaApontador Proximo;
+    ContaApontador proximo;
 } ContaItem;
 
 typedef struct
@@ -55,20 +54,19 @@ typedef struct
     ContaApontador Ultimo;
 } ListaContas;
 
-//dados das movimentacoes financeiras
-
+//Dados da movimentacao financeira
 typedef struct
 {
-    int sequencial;
-    int codigo_conta;
-    char dt_movimento[11];
-    char ds_favorecido[50];
-    double vl_movimento;
-    double vl_saldo;
+    int     sequencial;         //1, 2, 3... dentro de cada conta
+    int     codigo_conta;
+    char    dt_movimento[11];   //dd/mm/aaaa
+    char    tp_movimentacao[15];//"credito" ou "debito"
+    char    ds_favorecido[50];
+    double  vl_movimento;
+    double  vl_saldo;           //saldo da conta depois da movimentacao
 } reg_mov;
 
-//no da lista de movimentcoes simplesmente encadeada
-
+//No da lista de movimentacoes: SIMPLESMENTE encadeada (so proximo)
 typedef struct MovItem *MovApontador;
 
 typedef struct MovItem
@@ -444,33 +442,158 @@ void liberaContas(ListaContas *L){
     }
 }
 
+//---------------------- Lista simplesmente encadeada: MOVIMENTACOES ----------------------
+
+void iniciaMov(ListaMov *M){
+    M->Primeiro = NULL;
+    M->Ultimo = NULL;
+}
+
+//Insere no final da lista
+int insereMovFinal(ListaMov *M, reg_mov m){
+    MovApontador novo = (MovApontador) malloc(sizeof(MovItem));
+
+    if (novo == NULL) return 0;
+
+    novo->conteudo = m;
+    novo->proximo = NULL;
+
+    if (M->Primeiro == NULL){
+        M->Primeiro = novo;
+    }else{
+        M->Ultimo->proximo = novo;
+    }
+    M->Ultimo = novo;
+    return 1;
+}
+
+//Quantas movimentacoes uma conta tem
+int contaMov(ListaMov *M, int codigo){
+    int n = 0;
+    MovApontador p = M->Primeiro;
+
+    while (p != NULL){
+        if (p->conteudo.codigo_conta == codigo) n++;
+        p = p->proximo;
+    }
+    return n;
+}
+
+//Data (aaaammdd) da ultima movimentacao da conta; 0 se nao tem nenhuma
+long ultimaData(ListaMov *M, int codigo){
+    long maior = 0;
+    long k;
+    MovApontador p = M->Primeiro;
+
+    while (p != NULL){
+        if (p->conteudo.codigo_conta == codigo){
+            k = dataChave(p->conteudo.dt_movimento);
+            if (k > maior) maior = k;
+        }
+        p = p->proximo;
+    }
+    return maior;
+}
+
+//Libera toda a memoria da lista de movimentacoes
+void liberaMov(ListaMov *M){
+    MovApontador aux;
+
+    while (M->Primeiro != NULL){
+        aux = M->Primeiro;
+        M->Primeiro = aux->proximo;
+        free(aux);
+    }
+    M->Ultimo = NULL;
+}
+
+//Registra uma movimentacao e atualiza o saldo da conta. tipo: 1=credito 2=debito
+//Retorna 0=ok 1=conta inativa 2=valor invalido 3=data anterior a ultima
+//        4=limite excedido 5=sem memoria 6=data invalida
+int registraMov(ContaApontador c, ListaMov *M, int tipo, const char *data,
+                const char *favorecido, double valor){
+    reg_mov m;
+    long chave;
+    long long saldo, v, lim, novo;
+
+    if (strcmp(c->conteudo.status, "ativo") != 0) return 1;
+
+    if (!(valor > -1e12 && valor < 1e12) || centavos(valor) <= 0) return 2;
+
+    chave = dataChave(data);
+    if (chave < 0) return 6;
+    if (chave < ultimaData(M, c->conteudo.codigo_conta)) return 3;
+
+    saldo = centavos(c->conteudo.vl_saldo);
+    v     = centavos(valor);
+    lim   = centavos(c->conteudo.vl_limite);
+
+    if (tipo == 1) novo = saldo + v;
+    else           novo = saldo - v;
+
+    //Regra do limite: depois do debito o saldo nao pode ficar abaixo de -limite
+    if (tipo == 2 && novo < -lim) return 4;
+
+    memset(&m, 0, sizeof(m));
+    m.sequencial = contaMov(M, c->conteudo.codigo_conta) + 1;
+    m.codigo_conta = c->conteudo.codigo_conta;
+    strcpy(m.dt_movimento, data);
+    strcpy(m.tp_movimentacao, tipo == 1 ? "credito" : "debito");
+    strncpy(m.ds_favorecido, favorecido, 49);
+    m.vl_movimento = v / 100.0;
+    m.vl_saldo = novo / 100.0;
+
+    if (!insereMovFinal(M, m)) return 5;
+
+    c->conteudo.vl_saldo = m.vl_saldo;   //so atualiza a conta se a movimentacao entrou
+    return 0;
+}
+
+//Texto de cada codigo de erro do registraMov
+const char *msgMov(int cod){
+    switch (cod){
+        case 1: return "Conta inativa nao pode receber movimentacoes..";
+        case 2: return "Valor invalido: deve ser maior que zero..";
+        case 3: return "A data nao pode ser anterior a ultima movimentacao da conta..";
+        case 4: return "Saldo insuficiente: o debito ultrapassa o limite da conta..";
+        case 5: return "Erro ao alocar memoria..";
+        case 6: return "Data invalida..";
+    }
+    return "Operacao realizada..";
+}
+
+
 int main(){
     ListaContas L;
+    ListaMov M;
     reg_conta c;
     ContaApontador p;
+    int r;
 
     iniciaContas(&L);
+    iniciaMov(&M);
     memset(&c, 0, sizeof(c));
+    c.codigo_conta = 101;
+    strcpy(c.status, "ativo");
+    c.vl_saldo = 500;
+    c.vl_limite = 200;
+    incluiConta(&L, c, 3, 0);
+    p = pesquisaConta(&L, 101);
 
-    c.codigo_conta = 10;
-    incluiConta(&L, c, 3, 0);      //final
-    c.codigo_conta = 20;
-    incluiConta(&L, c, 3, 0);      //final
-    c.codigo_conta = 5;
-    incluiConta(&L, c, 1, 0);      //inicio
-    c.codigo_conta = 15;
-    incluiConta(&L, c, 2, 3);      //posicao 3
-
-    printf("Ida:   ");
-    for (p = L.Primeiro; p != NULL; p = p->proximo) printf("%d ", p->conteudo.codigo_conta);
-    printf("\nVolta: ");
-    for (p = L.Ultimo; p != NULL; p = p->anterior) printf("%d ", p->conteudo.codigo_conta);
-
-    removeConta(&L, pesquisaConta(&L, 10));
-    printf("\nDepois de remover a 10: ");
-    for (p = L.Primeiro; p != NULL; p = p->proximo) printf("%d ", p->conteudo.codigo_conta);
-    printf("\n");
+    r = registraMov(p, &M, 1, "10/10/2024", "Deposito", 200);
+    printf("credito 200   -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
+    r = registraMov(p, &M, 2, "12/10/2024", "Mercado", 100);
+    printf("debito 100    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
+    r = registraMov(p, &M, 2, "15/10/2024", "Posto", 150);
+    printf("debito 150    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
+    r = registraMov(p, &M, 2, "16/10/2024", "X", 650.01);
+    printf("debito 650.01 -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
+    r = registraMov(p, &M, 2, "16/10/2024", "X", 650);
+    printf("debito 650    -> codigo %d, saldo %.2f\n", r, p->conteudo.vl_saldo);
+    r = registraMov(p, &M, 1, "01/01/2024", "X", 10);
+    printf("data antiga   -> codigo %d\n", r);
 
     liberaContas(&L);
+    liberaMov(&M);
     return 0;
 }

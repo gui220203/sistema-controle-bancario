@@ -1072,26 +1072,418 @@ void removerConta(ListaContas *L, ListaMov *M){
             resp = perguntaInt("Deseja remover outra? (1=Sim;2=Nao).: ");
         }
     }while (codigo != 0 && resp == 1);
-}int main(){
-    ListaContas L;
-    ListaMov M;
-    int op;
+}
+//---------------------- Movimentacao financeira ----------------------
 
-    iniciaContas(&L);
-    iniciaMov(&M);
+//Registrar movimentacao: tipo 1=entrada (credito), 2=saida (debito)
+void registrarMovimentacao(ListaContas *L, ListaMov *M, int tipo){
+    ContaApontador p;
+    char data[11];
+    char fav[50];
+    double valor;
+    int codigo;
+    int resp;
+    int r;
 
     do{
-        system("cls");
-        printf("1-Incluir 2-Alterar 3-Consultar 4-Remover 0-Sair: ");
-        op = lerOpcao();
+        resp = 2;
 
-        if (op == 1) cadastrarConta(&L, 3);
-        if (op == 2) alterarConta(&L);
-        if (op == 3) consultarConta(&L, &M);
-        if (op == 4) removerConta(&L, &M);
-    }while (op != 0 && op != -1);
+        tela();
+        tela_mov();
+        titulo(tipo == 1 ? "Registrar Entrada (Credito)" : "Registrar Saida (Debito)");
 
-    liberaContas(&L);
-    liberaMov(&M);
+        if (L->Primeiro == NULL){
+            mensagem("Nenhuma conta cadastrada..");
+            return;
+        }
+
+        codigo = pedeCodigoConta(L, 1);
+
+        if (codigo != 0){
+            p = pesquisaConta(L, codigo);
+
+            gotoxy(COL,7);
+            printf("%s", p->conteudo.banco);
+            gotoxy(COL,9);
+            printf("%.2f", p->conteudo.vl_saldo);
+            gotoxy(COL,11);
+            printf("%.2f", p->conteudo.vl_limite);
+
+            if (strcmp(p->conteudo.status, "ativo") != 0){
+                mensagem("Conta inativa nao pode receber movimentacoes..");
+            }else{
+                lerData(13, data);
+                lerTextoOpcional(15, fav, 50);
+
+                do{
+                    valor = lerDouble(17);
+                    if (centavos(valor) <= 0) mensagem("O valor deve ser maior que zero..");
+                }while (centavos(valor) <= 0);
+
+                resp = perguntaInt("Confirma a movimentacao? (1=Sim;2=Nao).: ");
+
+                if (resp == 1){
+                    r = registraMov(p, M, tipo, data, fav, valor);
+
+                    if (r == 0){
+                        gotoxy(COL,19);
+                        printf("%.2f", p->conteudo.vl_saldo);
+                        mensagem("Movimentacao registrada com sucesso..");
+                    }else{
+                        mensagem(msgMov(r));
+                    }
+                }
+            }
+
+            resp = perguntaInt("Deseja registrar outra? (1=Sim;2=Nao).: ");
+        }
+    }while (codigo != 0 && resp == 1);
+}
+
+//---------------------- Relatorios ----------------------
+
+//Desenha uma pagina de relatorio. tipoCab: 1=contas, 2=movimentacoes
+void pagina(const char *tit, int tipoCab){
+    tela();
+    titulo(tit);
+
+    gotoxy(3,5);
+    if (tipoCab == 1){
+        printf("%-6s %-18s %-8s %-14s %-15s %12s %12s  %-8s",
+               "Codigo", "Banco", "Agencia", "Numero", "Tipo", "Saldo (R$)", "Limite (R$)", "Status");
+    }else{
+        printf("%-5s %-11s %-9s %12s %14s   %-40s",
+               "Seq", "Data", "Tipo", "Valor (R$)", "Saldo Apos(R$)", "Favorecido/Origem");
+    }
+    gotoxy(3,6);
+    printf("----------------------------------------------------------------------------------------------------------");
+}
+
+//Devolve a proxima linha livre; se a pagina encheu, pede uma tecla e comeca outra
+int novaLinha(int *linha, const char *tit, int tipoCab){
+    if (*linha > LINHA_FIM){
+        mensagem("Pressione uma tecla para continuar..");
+        pagina(tit, tipoCab);
+        *linha = LINHA_INI;
+    }
+    return (*linha)++;
+}
+
+void linhaConta(int y, reg_conta *c){
+    gotoxy(3,y);
+    printf("%-6d %-18.18s %-8.8s %-14.14s %-15.15s %12.2f %12.2f  %-8s",
+           c->codigo_conta, c->banco, c->agencia, c->numero_conta, c->tipo_conta,
+           c->vl_saldo, c->vl_limite, c->status);
+}
+
+//Relatorio de contas. modo 1=todas (com balanco), 2=somente inativas
+void relatorioContas(ListaContas *L, int modo){
+    const char *tit = (modo == 1) ? "Relatorio de Contas Cadastradas" : "Relatorio de Contas Inativas";
+    ContaApontador p;
+    int linha = LINHA_INI;
+    int qtd = 0, ativas = 0;
+    long long total = 0;
+    int inativa;
+
+    pagina(tit, 1);
+
+    for (p = L->Primeiro; p != NULL; p = p->proximo){
+        inativa = (strcmp(p->conteudo.status, "inativo") == 0);
+
+        if (modo == 2 && !inativa) continue;
+
+        linhaConta(novaLinha(&linha, tit, 1), &p->conteudo);
+        qtd++;
+        if (!inativa) ativas++;
+        total += centavos(p->conteudo.vl_saldo);
+    }
+
+    if (qtd == 0){
+        gotoxy(3,LINHA_INI);
+        printf(modo == 1 ? "Nenhuma conta cadastrada." : "Nenhuma conta inativa encontrada.");
+    }else if (modo == 1){
+        //Balanco fisico (quantidade) e financeiro (soma dos saldos)
+        gotoxy(3,21);
+        printf("Balanco fisico: %d conta(s) - %d ativa(s), %d inativa(s)   |   Balanco financeiro (soma dos saldos): R$ %.2f",
+               qtd, ativas, qtd - ativas, total / 100.0);
+    }
+    mensagem("Fim do relatorio. Pressione uma tecla..");
+}
+
+//Relatorio de limites de credito, do maior para o menor
+void relatorioLimites(ListaContas *L){
+    const char *tit = "Relatorio de Limites de Credito (maior para menor)";
+    ContaApontador *v;
+    ContaApontador aux;
+    ContaApontador p;
+    int n = tamanhoContas(L);
+    int i, j, troca;
+    int linha = LINHA_INI;
+
+    pagina(tit, 1);
+
+    if (n == 0){
+        gotoxy(3,LINHA_INI);
+        printf("Nenhuma conta cadastrada.");
+        mensagem("Fim do relatorio. Pressione uma tecla..");
+        return;
+    }
+
+    //Copia os enderecos das contas para um vetor e ordena o vetor (a lista nao muda)
+    v = (ContaApontador *) malloc(n * sizeof(ContaApontador));
+    if (v == NULL){
+        mensagem("Erro ao alocar memoria..");
+        return;
+    }
+
+    i = 0;
+    for (p = L->Primeiro; p != NULL; p = p->proximo){
+        v[i++] = p;
+    }
+
+    //Bubble sort: maior limite primeiro; empate fica pelo codigo
+    for (i = 0; i < n - 1; i++){
+        for (j = 0; j < n - 1 - i; j++){
+            troca = 0;
+            if (v[j]->conteudo.vl_limite < v[j+1]->conteudo.vl_limite) troca = 1;
+            if (v[j]->conteudo.vl_limite == v[j+1]->conteudo.vl_limite &&
+                v[j]->conteudo.codigo_conta > v[j+1]->conteudo.codigo_conta) troca = 1;
+
+            if (troca){
+                aux = v[j];
+                v[j] = v[j+1];
+                v[j+1] = aux;
+            }
+        }
+    }
+
+    for (i = 0; i < n; i++){
+        linhaConta(novaLinha(&linha, tit, 1), &v[i]->conteudo);
+    }
+    free(v);
+
+    mensagem("Fim do relatorio. Pressione uma tecla..");
+}
+
+//Extrato: movimentacoes de uma conta (pede o codigo)
+void extratoConta(ListaContas *L, ListaMov *M){
+    const char *tit = "Movimentacoes de uma Conta";
+    ContaApontador c;
+    MovApontador p;
+    int codigo;
+    int resp;
+    int linha;
+    int qtd;
+    int y;
+
+    do{
+        resp = 2;
+
+        tela();
+        tela_mov();
+        titulo(tit);
+
+        if (L->Primeiro == NULL){
+            mensagem("Nenhuma conta cadastrada..");
+            return;
+        }
+
+        codigo = pedeCodigoConta(L, 1);
+
+        if (codigo != 0){
+            c = pesquisaConta(L, codigo);
+            linha = LINHA_INI;
+            qtd = 0;
+
+            pagina(tit, 2);
+
+            for (p = M->Primeiro; p != NULL; p = p->proximo){
+                if (p->conteudo.codigo_conta != codigo) continue;
+
+                y = novaLinha(&linha, tit, 2);
+                gotoxy(3,y);
+                printf("%-5d %-11s %-9s %12.2f %14.2f   %-40.40s",
+                       p->conteudo.sequencial, p->conteudo.dt_movimento, p->conteudo.tp_movimentacao,
+                       p->conteudo.vl_movimento, p->conteudo.vl_saldo, p->conteudo.ds_favorecido);
+                qtd++;
+            }
+
+            if (qtd == 0){
+                gotoxy(3,LINHA_INI);
+                printf("Esta conta ainda nao possui movimentacoes.");
+            }
+
+            gotoxy(3,21);
+            printf("Conta %d - %s | Saldo atual: R$ %.2f | Limite: R$ %.2f",
+                   codigo, c->conteudo.banco, c->conteudo.vl_saldo, c->conteudo.vl_limite);
+
+            mensagem("Fim do extrato. Pressione uma tecla..");
+
+            tela();
+            tela_mov();
+            titulo(tit);
+            resp = perguntaInt("Deseja consultar outra conta? (1=Sim;2=Nao).: ");
+        }
+    }while (codigo != 0 && resp == 1);
+}
+
+//---------------------- Menus ----------------------
+
+//Desenha um menu e le a opcao. n = quantidade de itens
+int menu(const char *tit, const char *itens[], int n){
+    int i;
+
+    system("cls");
+    system("color 1F");
+    tela();
+    titulo(tit);
+
+    //Escreve as opcoes do menu
+    for (i = 0; i < n; i++){
+        gotoxy(40, 7 + i * 2);
+        printf("%s", itens[i]);
+    }
+
+    gotoxy(8,23);
+    printf("Digite sua opcao: ");
+    return lerOpcao();
+}
+
+void menuCadastro(ListaContas *L, ListaMov *M){
+    const char *itens[7] = {
+        "1. Incluir Conta no Inicio da Lista",
+        "2. Incluir Conta em uma Posicao da Lista",
+        "3. Incluir Conta no Final da Lista",
+        "4. Alterar Conta",
+        "5. Consultar Conta",
+        "6. Remover Conta",
+        "7. Voltar"
+    };
+    int opcao;
+
+    do{
+        opcao = menu("Cadastro de Contas", itens, 7);
+
+        switch (opcao)
+        {
+            case 1 : cadastrarConta(L, 1); break;
+            case 2 : cadastrarConta(L, 2); break;
+            case 3 : cadastrarConta(L, 3); break;
+            case 4 : alterarConta(L); break;
+            case 5 : consultarConta(L, M); break;
+            case 6 : removerConta(L, M); break;
+            case 7 : break;
+            default: if (opcao != -1) mensagem("Opcao invalida."); break;
+        }
+    }while (opcao != 7 && opcao != -1);
+}
+
+void menuMovimentacao(ListaContas *L, ListaMov *M){
+    const char *itens[4] = {
+        "1. Registrar Entrada (Credito)",
+        "2. Registrar Saida (Debito)",
+        "3. Consultar Movimentacao",
+        "4. Voltar"
+    };
+    int opcao;
+
+    do{
+        opcao = menu("Movimentacao Financeira", itens, 4);
+
+        switch (opcao)
+        {
+            case 1 : registrarMovimentacao(L, M, 1); break;
+            case 2 : registrarMovimentacao(L, M, 2); break;
+            case 3 : extratoConta(L, M); break;
+            case 4 : break;
+            default: if (opcao != -1) mensagem("Opcao invalida."); break;
+        }
+    }while (opcao != 4 && opcao != -1);
+}
+
+void menuRelatorios(ListaContas *L, ListaMov *M){
+    const char *itens[5] = {
+        "1. Contas Cadastradas",
+        "2. Movimentacoes de uma Conta",
+        "3. Contas Inativas",
+        "4. Limites de Credito por Conta",
+        "5. Voltar"
+    };
+    int opcao;
+
+    do{
+        opcao = menu("Relatorios", itens, 5);
+
+        switch (opcao)
+        {
+            case 1 : relatorioContas(L, 1); break;
+            case 2 : extratoConta(L, M); break;
+            case 3 : relatorioContas(L, 2); break;
+            case 4 : relatorioLimites(L); break;
+            case 5 : break;
+            default: if (opcao != -1) mensagem("Opcao invalida."); break;
+        }
+    }while (opcao != 5 && opcao != -1);
+}
+
+//O main fica de fora quando o arquivo e usado pelos testes (tests/test_logica.c)
+#ifndef TESTE
+int main(){
+    const char *itens[4] = {
+        "1. Cadastro de Contas",
+        "2. Movimentacao Financeira",
+        "3. Relatorios",
+        "4. Sair do Programa"
+    };
+    int opcao;
+    int ok;
+    int resp;
+    ListaContas LC;
+    ListaMov LM;
+
+    //Inicia as listas e carrega os dados do disco
+    iniciaContas(&LC);
+    iniciaMov(&LM);
+
+    if (!carregaContas(&LC, ARQ_CONTAS) || !carregaMov(&LM, &LC, ARQ_MOV)){
+        //Sai SEM gravar para nao sobrescrever um arquivo que ainda pode ser recuperado
+        liberaContas(&LC);
+        liberaMov(&LM);
+        printf("\nErro ao ler os arquivos %s e %s.\n", ARQ_CONTAS, ARQ_MOV);
+        printf("Eles podem estar corrompidos. Renomeie ou apague e execute de novo.\n");
+        return 1;
+    }
+
+    do
+    {
+        opcao = menu("Menu Principal", itens, 4);
+
+        switch (opcao)
+        {
+            case 1 : menuCadastro(&LC, &LM); break;
+            case 2 : menuMovimentacao(&LC, &LM); break;
+            case 3 : menuRelatorios(&LC, &LM); break;
+            case 4 : break;
+            default: if (opcao != -1) mensagem("Opcao invalida."); break;
+        }
+
+    } while (opcao != 4 && opcao != -1);
+
+    //Grava as listas no disco antes de sair (se falhar, deixa tentar de novo)
+    do{
+        ok = salvaContas(&LC, ARQ_CONTAS) && salvaMov(&LM, ARQ_MOV);
+        resp = 2;
+
+        if (!ok){
+            resp = perguntaInt("Erro ao gravar os arquivos. Tentar de novo? (1=Sim;2=Nao).: ");
+        }
+    }while (!ok && resp == 1);
+
+    if (ok) mensagem("Dados gravados em disco. Ate logo..");
+    else    mensagem("ATENCAO: os dados desta sessao NAO foram gravados..");
+
+    liberaContas(&LC);
+    liberaMov(&LM);
     return 0;
 }
+#endif

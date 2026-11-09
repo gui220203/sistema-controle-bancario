@@ -1,5 +1,7 @@
 /*
-Autor.....: Guilherme Viana da Silva
+Autor.....: Guilherme Viana da Silva 0 - 737
+Autor.....: Fábio Miguel 738 - 1490
+
 Turma.....: 2C ESW
 Data......: 07/11/2026
 Objetivo..: Sistema de Controle Bancario - aplicar listas encadeadas
